@@ -40,5 +40,44 @@ const Qualification = {
             console.error(`Qualify Error (${domain}):`, e);
             return { match: "NO", reason: "AI Failed", confidence: 0 };
         }
+    },
+    qualifyJobTitle: function (title, userCriteria) {
+        if (!title)
+            return false;
+        const cleanTitle = title.toLowerCase();
+        // ----------------------------------------
+        // STAGE 1: Fast Seniority Filter
+        // ----------------------------------------
+        const seniorRoles = [
+            'ceo', 'founder', 'owner', 'partner', 'president',
+            'director', 'head', 'chief', 'vp', 'vice president',
+            'manager', 'lead', 'decision maker'
+        ];
+        const hasSeniority = seniorRoles.some(role => cleanTitle.includes(role));
+        // If not senior, reject immediately (save API cost)
+        if (!hasSeniority) {
+            return false;
+        }
+        // ----------------------------------------
+        // STAGE 2: Gemini Functional Fit
+        // ----------------------------------------
+        const prompt = `
+      Task: Match Job Title.
+      Candidate Title: "${title}"
+      Target Criteria: "${userCriteria}"
+      
+      Does the Candidate match the Target in terms of Function/Department?
+      (Note: Seniority is already verified).
+      
+      Reply ONLY: YES or NO.
+    `;
+        try {
+            const result = ApiClient.callGemini(prompt).trim().toUpperCase();
+            return result.includes('YES');
+        }
+        catch (e) {
+            console.warn("Gemini Job Check Failed, failing open (YES).");
+            return true;
+        }
     }
 };

@@ -44,7 +44,8 @@ export const JobManager = {
     const props = PropertiesService.getScriptProperties();
     return {
       runId: props.getProperty(PROPS.JOB_ID),
-      type: props.getProperty(PROPS.JOB_TYPE)
+      type: props.getProperty(PROPS.JOB_TYPE),
+      startTime: props.getProperty(PROPS.START_TIME) // Return this
     };
   },
 

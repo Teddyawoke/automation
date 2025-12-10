@@ -21,14 +21,14 @@ function triggerButton1() {
         SpreadsheetApp.getUi().alert('Please enter a Customer Group Description.');
         return;
     }
-    // Start the Process
     CompanyDiscovery.start(description, region, budget);
 }
 /**
  * BUTTON 11: FIND CONTACTS
  */
 function triggerButton11() {
-    SpreadsheetApp.getUi().alert('Phase 1: Company Discovery must be finished first.');
+    // We activate the logic now
+    ContactDiscovery.start();
 }
 /**
  * BUTTON 13: FIND INFO EMAILS
@@ -38,7 +38,6 @@ function triggerButton13() {
 }
 /**
  * GLOBAL TRIGGER: Runs every 5 minutes
- * Checked by JobManager
  */
 function checkJobStatus() {
     const job = JobManager.getCurrentJob();
@@ -46,35 +45,67 @@ function checkJobStatus() {
         return;
     console.log(`Checking status for Job: ${job.type} (${job.runId})`);
     try {
-        const status = ApiClient.checkApifyStatus(job.runId); // 'RUNNING', 'SUCCEEDED', 'FAILED'
-        // Update UI Status (Optional - might fail if sheet closed, but try)
-        updateStatusUI(job.type || '', status);
-        if (status === 'SUCCEEDED') {
-            JobManager.stopJob(); // Stop Polling
-            // Route to Processor
-            if (job.type === 'company_discovery') {
+        // 1. APIFY CHECK
+        if (job.type === 'company_discovery') {
+            const status = ApiClient.checkApifyStatus(job.runId);
+            updateStatusUI('company_discovery', `⏳ Apify: ${status}`);
+            if (status === 'SUCCEEDED') {
+                JobManager.stopJob();
                 Processing.processCompanyResults(job.runId);
             }
+            else if (status === 'FAILED' || status === 'ABORTED') {
+                JobManager.stopJob();
+                updateStatusUI('company_discovery', '❌ Apify Failed');
+            }
         }
-        else if (status === 'FAILED' || status === 'ABORTED') {
-            JobManager.stopJob();
-            updateStatusUI(job.type || '', 'FAILED');
+        // 2. LEADSPICKER ROBOT CHECK
+        else if (job.type === 'contact_discovery_robot') {
+            const info = ApiClient.checkLeadspickerStatus();
+            updateStatusUI('contact_discovery', `⏳ Robot: ${info.status}`);
+            // A. Check for Failure
+            if (info.status === 'active' &&
+                info.last_log &&
+                info.last_log.toLowerCase().includes("error")) {
+                JobManager.stopJob();
+                updateStatusUI('contact_discovery', '❌ Robot Error');
+                throw new Error("Robot Failed: " + info.last_log);
+            }
+            // B. Check for Completion
+            // Safety check for null start time
+            if (!job.startTime) {
+                console.error("Job missing start time.");
+                JobManager.stopJob();
+                return;
+            }
+            const jobStartTime = new Date(job.startTime);
+            const robotRunTime = new Date(info.last_run);
+            // If status is active (idle) AND the last run is newer than when we started
+            if (info.status === 'active' && robotRunTime > jobStartTime) {
+                JobManager.stopJob();
+                Processing.processContactResults();
+            }
         }
-        // If RUNNING, do nothing. Trigger runs again in 5 mins.
     }
     catch (e) {
         console.error("Polling Error:", e);
     }
 }
-function updateStatusUI(type, msg) {
+/**
+ * HELPER: Update Status Cells
+ */
+function updateStatusUI(jobType, msg) {
     try {
         const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH.CONTROL);
-        if (type === 'company_discovery')
-            sheet === null || sheet === void 0 ? void 0 : sheet.getRange('D17').setValue(msg);
-        if (type === 'contact_discovery')
-            sheet === null || sheet === void 0 ? void 0 : sheet.getRange('D21').setValue(msg);
+        if (!sheet)
+            return;
+        if (jobType === 'company_discovery') {
+            sheet.getRange('D17').setValue(msg);
+        }
+        else if (jobType === 'contact_discovery' || jobType === 'contact_discovery_robot') {
+            sheet.getRange('D21').setValue(msg);
+        }
     }
     catch (e) {
-        // Ignore UI errors in background triggers
+        console.warn("Could not update UI status", e);
     }
 }

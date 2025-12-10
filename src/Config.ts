@@ -45,7 +45,11 @@ interface ApiKeys {
   
     // 3. System Limits
     MAX_RUNTIME_MS: 1000 * 60 * 4.5, // 4.5 Minutes
-    
+    LEADSPICKER: {
+      PROJECT_ID: 25644,
+      ROBOT_ID: 1018377,
+      BASE_URL: "https://app.leadspicker.com" // Verified based on docs
+    },
     RETRY: {
       MAX_ATTEMPTS: 3,
       DELAY_MS: 2000

@@ -18,7 +18,7 @@ export const Processing = {
       statusCell?.setValue('📥 Fetching Apify Data...');
       
       // 1. Fetch from Apify
-      const runInfo = ApiClient.fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${CONFIG.API_KEYS.APIFY}`, 'get');
+      const runInfo = ApiClient.fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${CONFIG.API_KEYS.APIFY}`, 'get', {});
       const datasetId = JSON.parse(runInfo.getContentText()).data.defaultDatasetId;
       const pages = ApiClient.fetchApifyResults(datasetId);
 
@@ -138,5 +138,109 @@ export const Processing = {
       if (domain.endsWith(ext)) return true;
     }
     return false;
+  },
+  processContactResults: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const statusCell = ss.getSheetByName(CONFIG.SHEETS.CONTROL)?.getRange('D21');
+    const cSheet = ss.getSheetByName(CONFIG.SHEETS.CONTACTS);
+    const qSheet = ss.getSheetByName(CONFIG.SHEETS.QUALIFIED);
+
+    try {
+      statusCell?.setValue('📥 Downloading People...');
+      
+      // 1. Fetch Pages (Safety Limit 50)
+      const MAX_PAGES = 50; 
+      let page = 1;
+      let allPeople: any[] = [];
+      let consecutiveEmpty = 0;
+
+      while (page <= MAX_PAGES) {
+        const res = ApiClient.getProjectPeople(page);
+        
+        if (!res || res.length === 0) {
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= 2) break; 
+        } else {
+          consecutiveEmpty = 0;
+          allPeople = allPeople.concat(res);
+          if (res.length < 10) break; // End of list
+        }
+        page++;
+        Utilities.sleep(200); 
+      }
+
+      if (allPeople.length === 0) {
+        statusCell?.setValue('⚠️ No People Found');
+        // Optional: Mark SENT_TO_ROBOT rows as NO_CONTACTS here
+        return;
+      }
+
+      statusCell?.setValue(`⚡ Filtering ${allPeople.length} people...`);
+
+      // 2. Filter & Map
+      const contactsToWrite: any[] = [];
+      const processedDomains = new Set<string>();
+      const userCriteria = ss.getSheetByName(CONFIG.SHEETS.CONTROL)?.getRange('C5').getValue() || "Decision Maker";
+
+      allPeople.forEach((p: any) => {
+        // Robust Mapping
+        const domain = p.domain || p.company_domain || '';
+        const title = p.title || p.position || '';
+        const email = p.work_email || p.email || '';
+        
+        if (!domain) return;
+
+        // Apply Hybrid Qualification
+        if (Qualification.qualifyJobTitle(title, userCriteria)) {
+          contactsToWrite.push([
+            domain,
+            p.first_name || '',
+            p.last_name || '',
+            title,
+            email,
+            email ? 'Provided by LP' : 'Pending',
+            p.linkedin_url || '',
+            'Leadspicker',
+            50
+          ]);
+        }
+        
+        processedDomains.add(domain);
+      });
+
+      // 3. Save
+      if (contactsToWrite.length > 0) {
+        if (!cSheet) {
+          statusCell?.setValue('❌ Error: Destination sheet not found');
+        } else {
+          const lastRow = Math.max(cSheet.getLastRow(), 1);
+          cSheet.getRange(lastRow + 1, 1, contactsToWrite.length, 9).setValues(contactsToWrite);
+          statusCell?.setValue(`✅ Saved ${contactsToWrite.length} Contacts`);
+        }
+      } else {
+        statusCell?.setValue('⚠️ Contacts found but all filtered out');
+      }
+
+      // 4. Update Status (Mark DOWNLOADED)
+      if (!qSheet) {
+        // Can't update status if qSheet is null
+        return;
+      }
+      const qData = qSheet.getDataRange().getValues();
+      for (let i = 1; i < qData.length; i++) {
+        const rowDomain = String(qData[i][0]);
+        // If we found people for this domain OR if it was sent to robot (and came back empty)
+        // Mark it as processed so we don't loop forever.
+        if (processedDomains.has(rowDomain)) {
+          qSheet.getRange(i + 1, 6).setValue('DOWNLOADED');
+        } else if (String(qData[i][5]) === 'SENT_TO_ROBOT') {
+           qSheet.getRange(i + 1, 6).setValue('NO CONTACTS FOUND');
+        }
+      }
+
+    } catch (e: any) {
+      console.error(e);
+      statusCell?.setValue(`❌ Error: ${e.message}`);
+    }
   }
 };
